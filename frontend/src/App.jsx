@@ -8,22 +8,36 @@ import MyTokenABI from './utils/MyToken.json';
 import './App.css';
 
 // 请将下面地址替换为你本地部署的合约地址
-const LENDING_POOL_ADDRESS = '0x20Ec2A852471CDa0659b75f56e9ca00BfbFb6BdF';
-const MY_TOKEN_ADDRESS = '0xA631A02D485F892a5dDe5D01Ff9F0106A05f9cb4';
+const LENDING_POOL_ADDRESS = '0x35A69924BA997583D0150819F35766FB32c76049';
+const MY_TOKEN_ADDRESS = '0x1091BedD8D5Dd191eBfdA2e1bcD89ddc4B792C22';
 
 export default function App() {
   const [provider, setProvider] = useState(null);
   const [signer, setSigner] = useState(null);
   const [account, setAccount] = useState('');
-  const [bpBalance, setBpBalance] = useState('0');
-  const [collateral, setCollateral] = useState('0');
-  const [debt, setDebt] = useState('0');
-  const [maxBorrow, setMaxBorrow] = useState('0');
-  const [ethBalance, setEthBalance] = useState('0');
-  const [poolEthBalance, setPoolEthBalance] = useState('0');
-  const [input, setInput] = useState({ deposit: '', borrow: '', repay: '', withdraw: '', liquidate: '', depositETH: '' });
-  const [status, setStatus] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [status, setStatus] = useState('');
+  const [activeTab, setActiveTab] = useState('deposit'); // deposit, borrow, repay, withdraw
+
+  // 资产状态
+  const [ethBalance, setEthBalance] = useState('0');
+  const [bpBalance, setBpBalance] = useState('0');
+  const [ethCollateral, setEthCollateral] = useState('0');
+  const [bpCollateral, setBpCollateral] = useState('0');
+  const [ethDebt, setEthDebt] = useState('0');
+  const [bpDebt, setBpDebt] = useState('0');
+  const [healthFactor, setHealthFactor] = useState('0');
+  const [ethBorrowable, setEthBorrowable] = useState('0');
+  const [bpBorrowable, setBpBorrowable] = useState('0');
+  const [selectedAsset, setSelectedAsset] = useState('ETH');
+
+  // 输入状态
+  const [input, setInput] = useState({
+    amount: '',
+    liquidateUser: '',
+    liquidateCollateral: '',
+    liquidateDebt: ''
+  });
 
   // 合约实例
   const [lendingPool, setLendingPool] = useState(null);
@@ -54,7 +68,6 @@ export default function App() {
       const signer = ethersProvider.getSigner();
       const account = await signer.getAddress();
       
-      // 保存连接状态
       localStorage.setItem('connectedAccount', account);
       
       setProvider(ethersProvider);
@@ -86,34 +99,52 @@ export default function App() {
 
   // 查询链上数据
   async function fetchData() {
-    if (!signer || !lendingPool || !myToken) {
-      console.log('fetchData: signer/lendingPool/myToken 未初始化');
-      return;
-    }
+    if (!signer || !lendingPool || !myToken) return;
+    
     try {
-      console.log('fetchData called, account:', account);
-      const bp = await myToken.balanceOf(account);
-      setBpBalance(ethers.utils.formatUnits(bp, 18));
-      setCollateral((await lendingPool.collateralBP(account)).toString());
-      setDebt(ethers.utils.formatEther(await lendingPool.debtETH(account)));
-      setMaxBorrow(ethers.utils.formatEther(await lendingPool.maxBorrowable(account)));
-      setEthBalance(ethers.utils.formatEther(await provider.getBalance(account)));
-      setPoolEthBalance(ethers.utils.formatEther(await lendingPool.poolETHBalance()));
-      console.log('bpBalance', ethers.utils.formatUnits(bp, 18));
+      // 获取余额
+      const ethBal = await provider.getBalance(account);
+      const bpBal = await myToken.balanceOf(account);
+      setEthBalance(ethers.utils.formatEther(ethBal));
+      setBpBalance(ethers.utils.formatUnits(bpBal, 18));
+
+      // 获取抵押品
+      const ethColl = await lendingPool.userAssetStates(account, ethers.constants.AddressZero);
+      const bpColl = await lendingPool.userAssetStates(account, MY_TOKEN_ADDRESS);
+      setEthCollateral(ethers.utils.formatEther(ethColl.collateral));
+      setBpCollateral(ethers.utils.formatUnits(bpColl.collateral, 18));
+
+      // 获取债务
+      setEthDebt(ethers.utils.formatEther(ethColl.debt));
+      setBpDebt(ethers.utils.formatUnits(bpColl.debt, 18));
+
+      // 获取健康因子
+      const health = await lendingPool.getHealthFactor(account);
+      let healthNum = ethers.utils.formatUnits(health, 18);
+      // 如果健康因子极大（如无债务），显示为 ∞
+      if (health.gt(ethers.constants.MaxUint256.div(2))) {
+        healthNum = '∞';
+      }
+      setHealthFactor(healthNum);
+
+      // 获取可借额度
+      const ethBorrow = await lendingPool.getBorrowableAmount(account, ethers.constants.AddressZero);
+      const bpBorrow = await lendingPool.getBorrowableAmount(account, MY_TOKEN_ADDRESS);
+      setEthBorrowable(ethers.utils.formatEther(ethBorrow));
+      setBpBorrowable(ethers.utils.formatUnits(bpBorrow, 18));
     } catch (e) {
-      console.error('fetchData error:', e);
+      console.error('数据获取失败:', e);
       setStatus('数据获取失败: ' + e.message);
     }
   }
 
   useEffect(() => {
-    console.log('useEffect triggered', { signer, lendingPool, myToken });
     if (signer && lendingPool && myToken) {
       fetchData();
     }
   }, [signer, lendingPool, myToken]);
 
-  // 监听账户和网络变化，自动刷新页面
+  // 监听账户和网络变化
   useEffect(() => {
     if (window.ethereum) {
       window.ethereum.on('accountsChanged', () => {
@@ -125,88 +156,153 @@ export default function App() {
     }
   }, []);
 
-  // 业务操作
-  async function handleDeposit() {
-    if (!myToken || !lendingPool) {
+  // 处理资产操作
+  async function handleAssetOperation() {
+    if (!lendingPool) {
       setStatus('请先连接钱包');
       return;
     }
+
     try {
-      setStatus('授权中...');
-      const tx1 = await myToken.approve(LENDING_POOL_ADDRESS, ethers.utils.parseUnits(input.deposit || '0', 18));
-      await tx1.wait();
-      setStatus('存入中...');
-      const tx2 = await lendingPool.depositCollateral(ethers.utils.parseUnits(input.deposit || '0', 18));
-      await tx2.wait();
-      setStatus('存入成功');
+      const amount = selectedAsset === 'ETH' ? 
+        ethers.utils.parseEther(input.amount || '0') :
+        ethers.utils.parseUnits(input.amount || '0', 18);
+
+      if (amount.lte(0)) {
+        setStatus('请输入大于0的数量');
+        return;
+      }
+
+      const assetAddress = selectedAsset === 'ETH' ? 
+        ethers.constants.AddressZero : MY_TOKEN_ADDRESS;
+
+      switch (activeTab) {
+        case 'deposit':
+          if (selectedAsset === 'ETH') {
+            setStatus('存入ETH中...');
+            const tx = await lendingPool.deposit(assetAddress, { value: amount });
+            await tx.wait();
+            setStatus('存入ETH成功');
+          } else {
+            // 检查余额
+            const balance = await myToken.balanceOf(account);
+            if (balance.lt(amount)) {
+              setStatus('BP余额不足');
+              return;
+            }
+
+            setStatus('授权中...');
+            const tx1 = await myToken.approve(LENDING_POOL_ADDRESS, amount);
+            await tx1.wait();
+
+            setStatus('存入BP中...');
+            const tx2 = await lendingPool.deposit(assetAddress, amount);
+            await tx2.wait();
+            setStatus('存入BP成功');
+          }
+          break;
+
+        case 'withdraw':
+          setStatus('赎回中...');
+          const tx = await lendingPool.withdraw(assetAddress, amount);
+          await tx.wait();
+          setStatus('赎回成功');
+          break;
+
+        case 'borrow':
+          if (selectedAsset === 'ETH' && amount.gt(ethers.utils.parseEther(ethBorrowable))) {
+            setStatus(`超出可借额度，最大可借: ${ethBorrowable} ETH`);
+            return;
+          }
+          if (selectedAsset === 'BP' && amount.gt(ethers.utils.parseUnits(bpBorrowable, 18))) {
+            setStatus(`超出可借额度，最大可借: ${bpBorrowable} BP`);
+            return;
+          }
+
+          setStatus('借出中...');
+          const borrowTx = await lendingPool.borrow(assetAddress, amount);
+          await borrowTx.wait();
+          setStatus('借出成功');
+          break;
+
+        case 'repay':
+          if (selectedAsset === 'ETH') {
+            setStatus('还款ETH中...');
+            const repayTx = await lendingPool.repay(assetAddress, { value: amount });
+            await repayTx.wait();
+            setStatus('还款ETH成功');
+          } else {
+            // 检查余额
+            const balance = await myToken.balanceOf(account);
+            if (balance.lt(amount)) {
+              setStatus('BP余额不足');
+              return;
+            }
+
+            setStatus('授权中...');
+            const tx1 = await myToken.approve(LENDING_POOL_ADDRESS, amount);
+            await tx1.wait();
+
+            setStatus('还款BP中...');
+            const tx2 = await lendingPool.repay(assetAddress, amount);
+            await tx2.wait();
+            setStatus('还款BP成功');
+          }
+          break;
+      }
+
       fetchData();
-    } catch (e) { setStatus('存入失败: ' + e.message); }
-  }
-  async function handleBorrow() {
-    if (!myToken || !lendingPool) {
-      setStatus('请先连接钱包');
-      return;
+      setInput({ ...input, amount: '' });
+    } catch (e) {
+      console.error('操作失败:', e);
+      if (e.code === 4001) {
+        setStatus('用户取消了交易');
+      } else if (e.message.includes('insufficient funds')) {
+        setStatus(`${selectedAsset}余额不足`);
+      } else if (e.message.includes('Health factor too low')) {
+        setStatus('健康因子过低，无法操作');
+      } else if (e.message.includes('Exceeds borrow limit')) {
+        setStatus('超出借款限额');
+      } else {
+        setStatus('操作失败: ' + e.message);
+      }
     }
-    try {
-      setStatus('借款中...');
-      const tx = await lendingPool.borrow(ethers.utils.parseEther(input.borrow || '0'));
-      await tx.wait();
-      setStatus('借款成功');
-      fetchData();
-    } catch (e) { setStatus('借款失败: ' + e.message); }
   }
-  async function handleRepay() {
-    if (!myToken || !lendingPool) {
-      setStatus('请先连接钱包');
-      return;
-    }
-    try {
-      setStatus('还款中...');
-      const tx = await lendingPool.repay({ value: ethers.utils.parseEther(input.repay || '0') });
-      await tx.wait();
-      setStatus('还款成功');
-      fetchData();
-    } catch (e) { setStatus('还款失败: ' + e.message); }
-  }
-  async function handleWithdraw() {
-    if (!myToken || !lendingPool) {
-      setStatus('请先连接钱包');
-      return;
-    }
-    try {
-      setStatus('赎回中...');
-      const tx = await lendingPool.withdrawCollateral(ethers.utils.parseUnits(input.withdraw || '0', 18));
-      await tx.wait();
-      setStatus('赎回成功');
-      fetchData();
-    } catch (e) { setStatus('赎回失败: ' + e.message); }
-  }
+
   async function handleLiquidate() {
-    if (!myToken || !lendingPool) {
-      setStatus('请先连接钱包');
-      return;
-    }
-    try {
-      setStatus('清算中...');
-      const tx = await lendingPool.liquidate(input.liquidate);
-      await tx.wait();
-      setStatus('清算成功');
-      fetchData();
-    } catch (e) { setStatus('清算失败: ' + e.message); }
-  }
-  async function handleDepositETH() {
     if (!lendingPool) {
       setStatus('请先连接钱包');
       return;
     }
     try {
-      setStatus('存入ETH中...');
-      const tx = await lendingPool.depositETH({ value: ethers.utils.parseEther(input.depositETH || '0') });
+      if (!ethers.utils.isAddress(input.liquidateUser)) {
+        setStatus('请输入有效的地址');
+        return;
+      }
+
+      const collateralAsset = input.liquidateCollateral === 'ETH' ? 
+        ethers.constants.AddressZero : MY_TOKEN_ADDRESS;
+      const debtAsset = input.liquidateDebt === 'ETH' ? 
+        ethers.constants.AddressZero : MY_TOKEN_ADDRESS;
+
+      setStatus('清算中...');
+      const tx = await lendingPool.liquidate(
+        input.liquidateUser,
+        collateralAsset,
+        debtAsset
+      );
       await tx.wait();
-      setStatus('存入ETH成功');
+      setStatus('清算成功');
       fetchData();
     } catch (e) {
-      setStatus('存入ETH失败: ' + e.message);
+      console.error('清算失败:', e);
+      if (e.code === 4001) {
+        setStatus('用户取消了交易');
+      } else if (e.message.includes('User is healthy')) {
+        setStatus('该用户不符合清算条件');
+      } else {
+        setStatus('清算失败: ' + e.message);
+      }
     }
   }
 
@@ -242,128 +338,137 @@ export default function App() {
             <div className="balance-card">
               <h3>资产概览</h3>
               <div className="balance-item">
-                <span>BP 余额:</span>
-                <span>{bpBalance}</span>
-              </div>
-              <div className="balance-item">
                 <span>ETH 余额:</span>
                 <span>{ethBalance}</span>
               </div>
               <div className="balance-item">
-                <span>已抵押 BP:</span>
-                <span>{collateral}</span>
+                <span>BP 余额:</span>
+                <span>{bpBalance}</span>
               </div>
               <div className="balance-item">
-                <span>债务 ETH:</span>
-                <span>{debt}</span>
+                <span>ETH 抵押:</span>
+                <span>{ethCollateral}</span>
               </div>
               <div className="balance-item">
-                <span>最大可借 ETH:</span>
-                <span>{maxBorrow}</span>
+                <span>BP 抵押:</span>
+                <span>{bpCollateral}</span>
               </div>
               <div className="balance-item">
-                <span>池子ETH余额:</span>
-                <span>{poolEthBalance}</span>
+                <span>ETH 债务:</span>
+                <span>{ethDebt}</span>
+              </div>
+              <div className="balance-item">
+                <span>BP 债务:</span>
+                <span>{bpDebt}</span>
+              </div>
+              <div className="balance-item">
+                <span>健康因子:</span>
+                <span>{healthFactor}</span>
+              </div>
+              <div className="balance-item">
+                <span>可借 ETH:</span>
+                <span>{ethBorrowable}</span>
+              </div>
+              <div className="balance-item">
+                <span>可借 BP:</span>
+                <span>{bpBorrowable}</span>
               </div>
             </div>
           </div>
 
           <div className="action-cards">
             <div className="action-card">
-              <h3>抵押操作</h3>
-              <div className="input-group">
-                <input 
-                  type="number"
-                  placeholder="存入BP数量" 
-                  value={input.deposit} 
-                  onChange={e => setInput({ ...input, deposit: e.target.value })} 
-                />
+              <div className="tabs">
                 <button 
-                  className="action-button"
-                  onClick={handleDeposit} 
-                  disabled={!myToken || !lendingPool}
+                  className={`tab ${activeTab === 'deposit' ? 'active' : ''}`}
+                  onClick={() => setActiveTab('deposit')}
                 >
-                  存入BP
+                  存入
                 </button>
-              </div>
-              <div className="input-group">
-                <input 
-                  type="number"
-                  placeholder="赎回BP数量" 
-                  value={input.withdraw} 
-                  onChange={e => setInput({ ...input, withdraw: e.target.value })} 
-                />
                 <button 
-                  className="action-button"
-                  onClick={handleWithdraw} 
-                  disabled={!myToken || !lendingPool}
+                  className={`tab ${activeTab === 'withdraw' ? 'active' : ''}`}
+                  onClick={() => setActiveTab('withdraw')}
                 >
-                  赎回BP
+                  赎回
                 </button>
-              </div>
-            </div>
-
-            <div className="action-card">
-              <h3>借贷操作</h3>
-              <div className="input-group">
-                <input 
-                  type="number"
-                  placeholder="借出ETH数量" 
-                  value={input.borrow} 
-                  onChange={e => setInput({ ...input, borrow: e.target.value })} 
-                />
                 <button 
-                  className="action-button"
-                  onClick={handleBorrow} 
-                  disabled={!myToken || !lendingPool}
+                  className={`tab ${activeTab === 'borrow' ? 'active' : ''}`}
+                  onClick={() => setActiveTab('borrow')}
                 >
-                  借出ETH
+                  借出
                 </button>
-              </div>
-              <div className="input-group">
-                <input 
-                  type="number"
-                  placeholder="还款ETH数量" 
-                  value={input.repay} 
-                  onChange={e => setInput({ ...input, repay: e.target.value })} 
-                />
                 <button 
-                  className="action-button"
-                  onClick={handleRepay} 
-                  disabled={!myToken || !lendingPool}
+                  className={`tab ${activeTab === 'repay' ? 'active' : ''}`}
+                  onClick={() => setActiveTab('repay')}
                 >
                   还款
                 </button>
               </div>
-            </div>
 
-            <div className="action-card">
-              <h3>其他操作</h3>
+              <div className="asset-selector">
+                <button 
+                  className={`asset-button ${selectedAsset === 'ETH' ? 'active' : ''}`}
+                  onClick={() => setSelectedAsset('ETH')}
+                >
+                  ETH
+                </button>
+                <button 
+                  className={`asset-button ${selectedAsset === 'BP' ? 'active' : ''}`}
+                  onClick={() => setSelectedAsset('BP')}
+                >
+                  BP
+                </button>
+              </div>
+
               <div className="input-group">
                 <input 
                   type="number"
-                  placeholder="存入ETH数量" 
-                  value={input.depositETH} 
-                  onChange={e => setInput({ ...input, depositETH: e.target.value })} 
+                  placeholder={`${activeTab === 'deposit' ? '存入' : 
+                    activeTab === 'withdraw' ? '赎回' : 
+                    activeTab === 'borrow' ? '借出' : '还款'}${selectedAsset}数量`}
+                  value={input.amount}
+                  onChange={e => setInput({ ...input, amount: e.target.value })}
                 />
                 <button 
                   className="action-button"
-                  onClick={handleDepositETH} 
+                  onClick={handleAssetOperation}
                   disabled={!lendingPool}
                 >
-                  存入ETH
+                  {activeTab === 'deposit' ? '存入' : 
+                   activeTab === 'withdraw' ? '赎回' : 
+                   activeTab === 'borrow' ? '借出' : '还款'}
                 </button>
               </div>
+            </div>
+
+            <div className="action-card">
+              <h3>清算操作</h3>
               <div className="input-group">
                 <input 
                   placeholder="清算用户地址" 
-                  value={input.liquidate} 
-                  onChange={e => setInput({ ...input, liquidate: e.target.value })} 
+                  value={input.liquidateUser} 
+                  onChange={e => setInput({ ...input, liquidateUser: e.target.value })} 
                 />
+                <select
+                  value={input.liquidateCollateral}
+                  onChange={e => setInput({ ...input, liquidateCollateral: e.target.value })}
+                >
+                  <option value="">选择抵押品</option>
+                  <option value="ETH">ETH</option>
+                  <option value="BP">BP</option>
+                </select>
+                <select
+                  value={input.liquidateDebt}
+                  onChange={e => setInput({ ...input, liquidateDebt: e.target.value })}
+                >
+                  <option value="">选择债务</option>
+                  <option value="ETH">ETH</option>
+                  <option value="BP">BP</option>
+                </select>
                 <button 
                   className="action-button"
                   onClick={handleLiquidate} 
-                  disabled={!myToken || !lendingPool}
+                  disabled={!lendingPool}
                 >
                   清算
                 </button>
