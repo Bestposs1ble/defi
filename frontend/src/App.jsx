@@ -8,8 +8,8 @@ import MyTokenABI from './utils/MyToken.json';
 import './App.css';
 
 // 请将下面地址替换为你本地部署的合约地址
-const LENDING_POOL_ADDRESS = '0x35A69924BA997583D0150819F35766FB32c76049';
-const MY_TOKEN_ADDRESS = '0x1091BedD8D5Dd191eBfdA2e1bcD89ddc4B792C22';
+const LENDING_POOL_ADDRESS = '0x062f527ED466dEf661b7ff63f1CCAC7c3846B30C';
+const MY_TOKEN_ADDRESS = '0xB157B7f4de9908ea753E95e3013ADcf3961Ddf36';
 
 export default function App() {
   const [provider, setProvider] = useState(null);
@@ -30,6 +30,8 @@ export default function App() {
   const [ethBorrowable, setEthBorrowable] = useState('0');
   const [bpBorrowable, setBpBorrowable] = useState('0');
   const [selectedAsset, setSelectedAsset] = useState('ETH');
+  const [redeemableEth, setRedeemableEth] = useState('0');
+  const [redeemableBp, setRedeemableBp] = useState('0');
 
   // 输入状态
   const [input, setInput] = useState({
@@ -132,6 +134,12 @@ export default function App() {
       const bpBorrow = await lendingPool.getBorrowableAmount(account, MY_TOKEN_ADDRESS);
       setEthBorrowable(ethers.utils.formatEther(ethBorrow));
       setBpBorrowable(ethers.utils.formatUnits(bpBorrow, 18));
+
+      // 获取可赎回额度
+      const poolEth = await provider.getBalance(LENDING_POOL_ADDRESS);
+      const poolBp = await myToken.balanceOf(LENDING_POOL_ADDRESS);
+      setRedeemableEth(ethers.utils.formatEther(poolEth));
+      setRedeemableBp(ethers.utils.formatUnits(poolBp, 18));
     } catch (e) {
       console.error('数据获取失败:', e);
       setStatus('数据获取失败: ' + e.message);
@@ -180,7 +188,7 @@ export default function App() {
         case 'deposit':
           if (selectedAsset === 'ETH') {
             setStatus('存入ETH中...');
-            const tx = await lendingPool.deposit(assetAddress, { value: amount });
+            const tx = await lendingPool.deposit(assetAddress, 0, { value: amount });
             await tx.wait();
             setStatus('存入ETH成功');
           } else {
@@ -203,6 +211,12 @@ export default function App() {
           break;
 
         case 'withdraw':
+          // 判断赎回额度
+          if ((selectedAsset === 'ETH' && amount.gt(ethers.utils.parseEther(redeemableEth))) ||
+              (selectedAsset === 'BP' && amount.gt(ethers.utils.parseUnits(redeemableBp, 18)))) {
+            setStatus(`当前池子可用${selectedAsset}不足，最多可赎回${selectedAsset === 'ETH' ? redeemableEth : redeemableBp} ${selectedAsset}，剩余部分需等待流动性恢复`);
+            return;
+          }
           setStatus('赎回中...');
           const tx = await lendingPool.withdraw(assetAddress, amount);
           await tx.wait();
@@ -372,6 +386,14 @@ export default function App() {
               <div className="balance-item">
                 <span>可借 BP:</span>
                 <span>{bpBorrowable}</span>
+              </div>
+              <div className="balance-item redeemable">
+                <span>可赎回ETH:</span>
+                <span>{redeemableEth}</span>
+              </div>
+              <div className="balance-item redeemable">
+                <span>可赎回BP:</span>
+                <span>{redeemableBp}</span>
               </div>
             </div>
           </div>

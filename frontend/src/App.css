@@ -134,6 +134,11 @@ body {
   color: #333;
 }
 
+.balance-item.redeemable {
+  color: #1976d2;
+  font-weight: bold;
+}
+
 /* 操作卡片 */
 .action-cards {
   display: grid;

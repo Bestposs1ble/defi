@@ -105,15 +105,14 @@ contract LendingPool is ReentrancyGuard, Pausable, Ownable {
     }
 
     // 用户函数
-    function deposit(address asset) external payable nonReentrant whenNotPaused {
+    function deposit(address asset, uint256 amount) external payable nonReentrant whenNotPaused {
         require(assetConfigs[asset].isActive, "Asset not active");
-        
-        uint256 amount;
         if (asset == address(0)) {
+            require(msg.value > 0, "Amount must be > 0");
             amount = msg.value;
         } else {
-            amount = msg.value;
             require(amount > 0, "Amount must be > 0");
+            require(msg.value == 0, "Do not send ETH when depositing ERC20");
             require(IERC20(asset).transferFrom(msg.sender, address(this), amount), "Transfer failed");
         }
 
@@ -263,8 +262,12 @@ contract LendingPool is ReentrancyGuard, Pausable, Ownable {
             }
         }
 
-        if (totalDebtValue >= totalCollateralValue) return 0;
-        return (totalCollateralValue - totalDebtValue) * 1e18 / assetPrices[asset];
+        if (totalCollateralValue <= totalDebtValue) return 0;
+        uint256 theoretical = (totalCollateralValue - totalDebtValue) * 1e18 / assetPrices[asset];
+
+        // 加入池子实际余额限制
+        uint256 availableLiquidity = asset == address(0) ? address(this).balance : IERC20(asset).balanceOf(address(this));
+        return theoretical < availableLiquidity ? theoretical : availableLiquidity;
     }
 
     // 接收ETH
