@@ -11,6 +11,8 @@ contract LendingPool {
     mapping(address => uint256) public collateralBP;
     // 用户借出的ETH数量
     mapping(address => uint256) public debtETH;
+    // 用户存入的ETH数量
+    mapping(address => uint256) public ethDeposits;
 
     // BP/ETH 价格（18位精度），如 0.01 ETH = 1e16
     uint256 public bpPriceInETH;
@@ -88,6 +90,17 @@ contract LendingPool {
         debtETH[user] = 0;
         require(bpToken.transfer(msg.sender, reward), "Reward transfer failed");
         // 剩余BP归合约/平台
+    }
+
+    // 存入ETH
+    function depositETH() external payable {
+        require(msg.value > 0, "No ETH sent");
+        ethDeposits[msg.sender] += msg.value;
+    }
+
+    // 查询池子ETH余额
+    function poolETHBalance() public view returns (uint256) {
+        return address(this).balance;
     }
 
     // 合约可接收ETH
