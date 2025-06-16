@@ -110,4 +110,4 @@ test/              # 合约测试
 如果你觉得这个项目有用，欢迎 star、fork、提 issue！  
 有问题也可以直接联系我，欢迎一起交流 DeFi 技术和产品体验！
 我的博客：https://bestpossible.space/
-我的邮箱：hyc@bestpossible.com
+我的邮箱：hyc@bestpossible.space
