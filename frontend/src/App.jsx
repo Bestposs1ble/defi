@@ -8,8 +8,8 @@ import MyTokenABI from './utils/MyToken.json';
 import './App.css';
 
 // 请将下面地址替换为你本地部署的合约地址
-const LENDING_POOL_ADDRESS = '0x062f527ED466dEf661b7ff63f1CCAC7c3846B30C';
-const MY_TOKEN_ADDRESS = '0xB157B7f4de9908ea753E95e3013ADcf3961Ddf36';
+const LENDING_POOL_ADDRESS = '0x2defBcaF547105811494a4598cfFEeB348DbA718';
+const MY_TOKEN_ADDRESS = '0xa718081eCCAEf05d0EB9F301dF020Ad292c8520F';
 
 export default function App() {
   const [provider, setProvider] = useState(null);
@@ -46,6 +46,16 @@ export default function App() {
   // 合约实例
   const [lendingPool, setLendingPool] = useState(null);
   const [myToken, setMyToken] = useState(null);
+
+  // 清算目标资产状态
+  const [liquidateTarget, setLiquidateTarget] = useState({
+    ethCollateral: '0',
+    bpCollateral: '0',
+    ethDebt: '0',
+    bpDebt: '0',
+    healthFactor: '0',
+    canLiquidate: false
+  });
 
   // 检查本地存储的钱包连接状态
   useEffect(() => {
@@ -173,6 +183,49 @@ export default function App() {
     }
   }, []);
 
+  // 查询被清算用户资产结构
+  async function fetchLiquidationTargetInfo(address) {
+    if (!lendingPool || !myToken || !ethers.utils.isAddress(address)) {
+      setLiquidateTarget({
+        ethCollateral: '0', bpCollateral: '0', ethDebt: '0', bpDebt: '0', healthFactor: '0', canLiquidate: false
+      });
+      return;
+    }
+    try {
+      const ethColl = await lendingPool.userAssetStates(address, ethers.constants.AddressZero);
+      const bpColl = await lendingPool.userAssetStates(address, MY_TOKEN_ADDRESS);
+      const health = await lendingPool.getHealthFactor(address);
+      let healthNum = ethers.utils.formatUnits(health, 18);
+      let canLiquidate = false;
+      if (health.lte(ethers.utils.parseUnits('1', 18))) canLiquidate = true;
+      if (health.gt(ethers.constants.MaxUint256.div(2))) healthNum = '∞';
+      setLiquidateTarget({
+        ethCollateral: ethers.utils.formatEther(ethColl.collateral),
+        bpCollateral: ethers.utils.formatUnits(bpColl.collateral, 18),
+        ethDebt: ethers.utils.formatEther(ethColl.debt),
+        bpDebt: ethers.utils.formatUnits(bpColl.debt, 18),
+        healthFactor: healthNum,
+        canLiquidate
+      });
+    } catch (e) {
+      setLiquidateTarget({
+        ethCollateral: '0', bpCollateral: '0', ethDebt: '0', bpDebt: '0', healthFactor: '0', canLiquidate: false
+      });
+    }
+  }
+
+  // 监听清算用户地址输入变化
+  useEffect(() => {
+    if (input.liquidateUser && ethers.utils.isAddress(input.liquidateUser)) {
+      fetchLiquidationTargetInfo(input.liquidateUser);
+    } else {
+      setLiquidateTarget({
+        ethCollateral: '0', bpCollateral: '0', ethDebt: '0', bpDebt: '0', healthFactor: '0', canLiquidate: false
+      });
+    }
+    // eslint-disable-next-line
+  }, [input.liquidateUser, lendingPool, myToken]);
+
   // 处理资产操作
   async function handleAssetOperation() {
     if (!lendingPool) {
@@ -219,18 +272,43 @@ export default function App() {
           }
           break;
 
-        case 'withdraw':
-          // 判断赎回额度
-          if ((selectedAsset === 'ETH' && amount.gt(ethers.utils.parseEther(redeemableEth))) ||
-              (selectedAsset === 'BP' && amount.gt(ethers.utils.parseUnits(redeemableBp, 18)))) {
-            setStatus(`当前池子可用${selectedAsset}不足，最多可赎回${selectedAsset === 'ETH' ? redeemableEth : redeemableBp} ${selectedAsset}，剩余部分需等待流动性恢复`);
+        case 'withdraw': {
+          // 判断赎回额度和输入合法性
+          if (!input.amount || isNaN(input.amount) || Number(input.amount) <= 0) {
+            setStatus('请输入大于0的有效赎回数量');
+            return;
+          }
+          if ((selectedAsset === 'ETH' && Number(input.amount) > Number(userRedeemableEth)) ||
+              (selectedAsset === 'BP' && Number(input.amount) > Number(userRedeemableBp))) {
+            setStatus(`当前池子可用${selectedAsset}不足，最多可赎回${selectedAsset === 'ETH' ? userRedeemableEth : userRedeemableBp} ${selectedAsset}，剩余部分需等待流动性恢复`);
+            return;
+          }
+          if ((selectedAsset === 'ETH' && Number(input.amount) > Number(ethCollateral)) ||
+              (selectedAsset === 'BP' && Number(input.amount) > Number(bpCollateral))) {
+            setStatus(`赎回数量不能超过你的抵押数量`);
             return;
           }
           setStatus('赎回中...');
-          const tx = await lendingPool.withdraw(assetAddress, amount);
-          await tx.wait();
-          setStatus('赎回成功');
+          try {
+            const tx = await lendingPool.withdraw(assetAddress, amount);
+            await tx.wait();
+            setStatus('赎回成功');
+          } catch (e) {
+            console.error('赎回失败:', e);
+            if (e.code === 4001) {
+              setStatus('用户取消了交易');
+            } else if (e.message && e.message.includes('Health factor too low')) {
+              setStatus('赎回后健康因子过低，无法赎回');
+            } else if (e.message && e.message.includes('Insufficient collateral')) {
+              setStatus('抵押数量不足，无法赎回');
+            } else if (e.message && e.message.includes('Amount must be > 0')) {
+              setStatus('赎回数量必须大于0');
+            } else {
+              setStatus('赎回失败: ' + (e.data && e.data.message ? e.data.message : e.message));
+            }
+          }
           break;
+        }
 
         case 'borrow':
           if (selectedAsset === 'ETH' && amount.gt(ethers.utils.parseEther(ethBorrowable))) {
@@ -261,13 +339,12 @@ export default function App() {
               setStatus('BP余额不足');
               return;
             }
-
             setStatus('授权中...');
             const tx1 = await myToken.approve(LENDING_POOL_ADDRESS, amount);
             await tx1.wait();
-
             setStatus('还款BP中...');
-            const tx2 = await lendingPool.repay(assetAddress, amount);
+            // 只传 assetAddress，不传 amount
+            const tx2 = await lendingPool.repay(assetAddress);
             await tx2.wait();
             setStatus('还款BP成功');
           }
@@ -302,29 +379,59 @@ export default function App() {
         setStatus('请输入有效的地址');
         return;
       }
-
-      const collateralAsset = input.liquidateCollateral === 'ETH' ? 
-        ethers.constants.AddressZero : MY_TOKEN_ADDRESS;
-      const debtAsset = input.liquidateDebt === 'ETH' ? 
-        ethers.constants.AddressZero : MY_TOKEN_ADDRESS;
-
-      setStatus('清算中...');
-      const tx = await lendingPool.liquidate(
-        input.liquidateUser,
-        collateralAsset,
-        debtAsset
-      );
-      await tx.wait();
-      setStatus('清算成功');
+      if (!input.liquidateCollateral || !input.liquidateDebt) {
+        setStatus('请选择抵押品和债务类型');
+        return;
+      }
+      const collateralAsset = input.liquidateCollateral === 'ETH' ? ethers.constants.AddressZero : MY_TOKEN_ADDRESS;
+      const debtAsset = input.liquidateDebt === 'ETH' ? ethers.constants.AddressZero : MY_TOKEN_ADDRESS;
+      // 校验清算人余额和授权
+      if (input.liquidateDebt === 'BP') {
+        const myBp = await myToken.balanceOf(account);
+        const targetBpDebt = await lendingPool.userAssetStates(input.liquidateUser, MY_TOKEN_ADDRESS);
+        if (myBp.lt(targetBpDebt.debt)) {
+          setStatus('你的BP余额不足，无法清算');
+          return;
+        }
+        const allowance = await myToken.allowance(account, LENDING_POOL_ADDRESS);
+        if (allowance.lt(targetBpDebt.debt)) {
+          setStatus('请先授权足够BP给LendingPool合约');
+          return;
+        }
+        setStatus('清算中...');
+        const tx = await lendingPool.liquidate(input.liquidateUser, collateralAsset, debtAsset);
+        await tx.wait();
+        setStatus('清算成功');
+      } else if (input.liquidateDebt === 'ETH') {
+        const targetEthDebt = await lendingPool.userAssetStates(input.liquidateUser, ethers.constants.AddressZero);
+        const myEth = await provider.getBalance(account);
+        if (myEth.lt(targetEthDebt.debt)) {
+          setStatus('你的ETH余额不足，无法清算');
+          return;
+        }
+        setStatus('清算中...');
+        const tx = await lendingPool.liquidate(input.liquidateUser, collateralAsset, debtAsset, { value: targetEthDebt.debt });
+        await tx.wait();
+        setStatus('清算成功');
+      }
       fetchData();
+      fetchLiquidationTargetInfo(input.liquidateUser);
     } catch (e) {
       console.error('清算失败:', e);
       if (e.code === 4001) {
         setStatus('用户取消了交易');
-      } else if (e.message.includes('User is healthy')) {
-        setStatus('该用户不符合清算条件');
+      } else if (e.message && e.message.includes('User is healthy')) {
+        setStatus('该用户健康因子未低于1，无法清算');
+      } else if (e.message && e.message.includes('No collateral')) {
+        setStatus('该用户无可清算抵押品');
+      } else if (e.message && e.message.includes('No debt')) {
+        setStatus('该用户无可清算债务');
+      } else if (e.message && e.message.includes('Repay failed')) {
+        setStatus('清算人偿还债务失败，请检查余额和授权');
+      } else if (e.message && e.message.includes('ETH repay mismatch')) {
+        setStatus('请确保发送的ETH数量等于被清算人ETH债务');
       } else {
-        setStatus('清算失败: ' + e.message);
+        setStatus('清算失败: ' + (e.data && e.data.message ? e.data.message : e.message));
       }
     }
   }
@@ -474,6 +581,12 @@ export default function App() {
 
             <div className="action-card">
               <h3>清算操作</h3>
+              <div className="liquidate-target-info">
+                <div>健康因子: <span style={{color: liquidateTarget.canLiquidate ? '#d32f2f' : '#1976d2'}}>{liquidateTarget.healthFactor}</span></div>
+                <div>抵押品: ETH {liquidateTarget.ethCollateral} / BP {liquidateTarget.bpCollateral}</div>
+                <div>债务: ETH {liquidateTarget.ethDebt} / BP {liquidateTarget.bpDebt}</div>
+                {!liquidateTarget.canLiquidate && <div style={{color:'#d32f2f'}}>该用户健康因子≥1，暂不可清算</div>}
+              </div>
               <div className="input-group">
                 <input 
                   placeholder="清算用户地址" 
@@ -485,21 +598,21 @@ export default function App() {
                   onChange={e => setInput({ ...input, liquidateCollateral: e.target.value })}
                 >
                   <option value="">选择抵押品</option>
-                  <option value="ETH">ETH</option>
-                  <option value="BP">BP</option>
+                  {Number(liquidateTarget.ethCollateral) > 0 && <option value="ETH">ETH</option>}
+                  {Number(liquidateTarget.bpCollateral) > 0 && <option value="BP">BP</option>}
                 </select>
                 <select
                   value={input.liquidateDebt}
                   onChange={e => setInput({ ...input, liquidateDebt: e.target.value })}
                 >
                   <option value="">选择债务</option>
-                  <option value="ETH">ETH</option>
-                  <option value="BP">BP</option>
+                  {Number(liquidateTarget.ethDebt) > 0 && <option value="ETH">ETH</option>}
+                  {Number(liquidateTarget.bpDebt) > 0 && <option value="BP">BP</option>}
                 </select>
                 <button 
                   className="action-button"
                   onClick={handleLiquidate} 
-                  disabled={!lendingPool}
+                  disabled={!lendingPool || !liquidateTarget.canLiquidate}
                 >
                   清算
                 </button>

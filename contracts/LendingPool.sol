@@ -184,7 +184,7 @@ contract LendingPool is ReentrancyGuard, Pausable, Ownable {
         address user,
         address collateralAsset,
         address debtAsset
-    ) external nonReentrant whenNotPaused {
+    ) external payable nonReentrant whenNotPaused {
         require(getHealthFactor(user) < 1e18, "User is healthy");
         
         UserAssetState storage collateralState = userAssetStates[user][collateralAsset];
@@ -196,6 +196,13 @@ contract LendingPool is ReentrancyGuard, Pausable, Ownable {
         uint256 collateralAmount = collateralState.collateral;
         uint256 debtAmount = debtState.debt;
         uint256 bonus = collateralAmount * assetConfigs[collateralAsset].liquidationBonus / 10000;
+
+        // 清算人偿还债务
+        if (debtAsset == address(0)) {
+            require(msg.value == debtAmount, "ETH repay mismatch");
+        } else {
+            require(IERC20(debtAsset).transferFrom(msg.sender, address(this), debtAmount), "Repay failed");
+        }
 
         // 转移抵押品
         collateralState.collateral = 0;
