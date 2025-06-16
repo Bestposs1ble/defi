@@ -104,7 +104,6 @@ export default function App() {
   // 查询链上数据
   async function fetchData() {
     if (!signer || !lendingPool || !myToken) return;
-    
     try {
       // 获取余额
       const ethBal = await provider.getBalance(account);
@@ -115,8 +114,10 @@ export default function App() {
       // 获取抵押品
       const ethColl = await lendingPool.userAssetStates(account, ethers.constants.AddressZero);
       const bpColl = await lendingPool.userAssetStates(account, MY_TOKEN_ADDRESS);
-      setEthCollateral(ethers.utils.formatEther(ethColl.collateral));
-      setBpCollateral(ethers.utils.formatUnits(bpColl.collateral, 18));
+      const ethCollateralValue = ethers.utils.formatEther(ethColl.collateral);
+      const bpCollateralValue = ethers.utils.formatUnits(bpColl.collateral, 18);
+      setEthCollateral(ethCollateralValue);
+      setBpCollateral(bpCollateralValue);
 
       // 获取债务
       setEthDebt(ethers.utils.formatEther(ethColl.debt));
@@ -125,7 +126,6 @@ export default function App() {
       // 获取健康因子
       const health = await lendingPool.getHealthFactor(account);
       let healthNum = ethers.utils.formatUnits(health, 18);
-      // 如果健康因子极大（如无债务），显示为 ∞
       if (health.gt(ethers.constants.MaxUint256.div(2))) {
         healthNum = '∞';
       }
@@ -140,12 +140,13 @@ export default function App() {
       // 获取可赎回额度
       const poolEth = await provider.getBalance(LENDING_POOL_ADDRESS);
       const poolBp = await myToken.balanceOf(LENDING_POOL_ADDRESS);
-      setRedeemableEth(ethers.utils.formatEther(poolEth));
-      setRedeemableBp(ethers.utils.formatUnits(poolBp, 18));
-
-      // 计算用户可赎回额度
-      const userEth = Math.min(Number(ethCollateral), Number(ethers.utils.formatEther(poolEth)));
-      const userBp = Math.min(Number(bpCollateral), Number(ethers.utils.formatUnits(poolBp, 18)));
+      const poolEthValue = ethers.utils.formatEther(poolEth);
+      const poolBpValue = ethers.utils.formatUnits(poolBp, 18);
+      setRedeemableEth(poolEthValue);
+      setRedeemableBp(poolBpValue);
+      // 计算用户可赎回额度（直接用本地变量）
+      const userEth = Math.min(Number(ethCollateralValue), Number(poolEthValue));
+      const userBp = Math.min(Number(bpCollateralValue), Number(poolBpValue));
       setUserRedeemableEth(userEth.toString());
       setUserRedeemableBp(userBp.toString());
     } catch (e) {
