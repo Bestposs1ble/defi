@@ -32,6 +32,8 @@ export default function App() {
   const [selectedAsset, setSelectedAsset] = useState('ETH');
   const [redeemableEth, setRedeemableEth] = useState('0');
   const [redeemableBp, setRedeemableBp] = useState('0');
+  const [userRedeemableEth, setUserRedeemableEth] = useState('0');
+  const [userRedeemableBp, setUserRedeemableBp] = useState('0');
 
   // 输入状态
   const [input, setInput] = useState({
@@ -140,6 +142,12 @@ export default function App() {
       const poolBp = await myToken.balanceOf(LENDING_POOL_ADDRESS);
       setRedeemableEth(ethers.utils.formatEther(poolEth));
       setRedeemableBp(ethers.utils.formatUnits(poolBp, 18));
+
+      // 计算用户可赎回额度
+      const userEth = Math.min(Number(ethCollateral), Number(ethers.utils.formatEther(poolEth)));
+      const userBp = Math.min(Number(bpCollateral), Number(ethers.utils.formatUnits(poolBp, 18)));
+      setUserRedeemableEth(userEth.toString());
+      setUserRedeemableBp(userBp.toString());
     } catch (e) {
       console.error('数据获取失败:', e);
       setStatus('数据获取失败: ' + e.message);
@@ -389,11 +397,11 @@ export default function App() {
               </div>
               <div className="balance-item redeemable">
                 <span>可赎回ETH:</span>
-                <span>{redeemableEth}</span>
+                <span>{userRedeemableEth}</span>
               </div>
               <div className="balance-item redeemable">
                 <span>可赎回BP:</span>
-                <span>{redeemableBp}</span>
+                <span>{userRedeemableBp}</span>
               </div>
             </div>
           </div>
