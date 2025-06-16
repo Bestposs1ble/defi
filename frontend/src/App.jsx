@@ -467,49 +467,31 @@ export default function App() {
           <div className="balance-cards">
             <div className="balance-card">
               <h3>资产概览</h3>
-              <div className="balance-item">
-                <span>ETH 余额:</span>
-                <span>{ethBalance}</span>
+              <div className="balance-group">
+                <div className="balance-group-title">余额</div>
+                <div className="balance-item"><span>ETH 余额:</span><span>{ethBalance}</span></div>
+                <div className="balance-item"><span>BP 余额:</span><span>{bpBalance}</span></div>
               </div>
-              <div className="balance-item">
-                <span>BP 余额:</span>
-                <span>{bpBalance}</span>
+              <div className="balance-group">
+                <div className="balance-group-title">抵押</div>
+                <div className="balance-item"><span>ETH 抵押:</span><span>{ethCollateral}</span></div>
+                <div className="balance-item"><span>BP 抵押:</span><span>{bpCollateral}</span></div>
               </div>
-              <div className="balance-item">
-                <span>ETH 抵押:</span>
-                <span>{ethCollateral}</span>
+              <div className="balance-group">
+                <div className="balance-group-title">债务</div>
+                <div className="balance-item"><span>ETH 债务:</span><span>{ethDebt}</span></div>
+                <div className="balance-item"><span>BP 债务:</span><span>{bpDebt}</span></div>
               </div>
-              <div className="balance-item">
-                <span>BP 抵押:</span>
-                <span>{bpCollateral}</span>
+              <div className="balance-group">
+                <div className="balance-group-title">风险与额度</div>
+                <div className="balance-item"><span>健康因子:</span><span>{healthFactor}</span></div>
+                <div className="balance-item"><span>可借 ETH:</span><span>{ethBorrowable}</span></div>
+                <div className="balance-item"><span>可借 BP:</span><span>{bpBorrowable}</span></div>
               </div>
-              <div className="balance-item">
-                <span>ETH 债务:</span>
-                <span>{ethDebt}</span>
-              </div>
-              <div className="balance-item">
-                <span>BP 债务:</span>
-                <span>{bpDebt}</span>
-              </div>
-              <div className="balance-item">
-                <span>健康因子:</span>
-                <span>{healthFactor}</span>
-              </div>
-              <div className="balance-item">
-                <span>可借 ETH:</span>
-                <span>{ethBorrowable}</span>
-              </div>
-              <div className="balance-item">
-                <span>可借 BP:</span>
-                <span>{bpBorrowable}</span>
-              </div>
-              <div className="balance-item redeemable">
-                <span>可赎回ETH:</span>
-                <span>{userRedeemableEth}</span>
-              </div>
-              <div className="balance-item redeemable">
-                <span>可赎回BP:</span>
-                <span>{userRedeemableBp}</span>
+              <div className="balance-group">
+                <div className="balance-group-title">可赎回</div>
+                <div className="balance-item redeemable"><span>可赎回ETH:</span><span>{userRedeemableEth}</span></div>
+                <div className="balance-item redeemable"><span>可赎回BP:</span><span>{userRedeemableBp}</span></div>
               </div>
             </div>
           </div>
